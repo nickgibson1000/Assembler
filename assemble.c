@@ -38,14 +38,94 @@ static int pc = 0;
 // Global symtab struct
 static void *symtab;
 
+// Global error tracker
+static int error_count = 0;
+
 // Struct to hold symbol and its information
 typedef struct symbol_info {
   int address;
   bool exported;
   bool imported;
   bool referenced; 
-  //void *symtab_handle; // Symbol table reference
 } symbol_info_t;
+
+// Number of codes + directives in vmx20 system
+#define OPCODE_ARRAY_LENGTH 30
+
+//Table of all opcodes/directives for error handling
+static const char *opcodes[] = {
+  "halt",
+  "load",
+  "store",
+  "ldimm",
+  "ldaddr",
+  "ldind",
+  "stind",
+  "addf",
+  "subf",
+  "divf",
+  "mulf",
+  "addi",
+  "subi",
+  "divi",
+  "muli",
+  "call",
+  "ret",
+  "blt",
+  "bgt",
+  "beq",
+  "jmp",
+  "cmpxchg",
+  "getpid",
+  "getpn",
+  "push",
+  "pop",
+  "word",
+  "alloc",
+  "import",
+  "export"
+};
+
+typedef struct opcode_struct{
+  char *opcode_string;
+  int opcode_value;
+  int format;
+}opcode_struct_t;
+
+static opcode_struct_t opcodes[] = {
+{"halt",    0x00, 1},
+{"load",    0x01, 5},
+{"store",   0x02, 5},
+{"ldimm",   0x03, 4},
+{"ldaddr",  0x04, 5},
+{"ldind",   0x05, 7},
+{"stind",   0x06, 7},
+{"addf",    0x07, 6},
+{"subf",    0x08, 6},
+{"divf",    0x09, 6},
+{"mulf",    0x0A, 6},
+{"addi",    0x0B, 6},
+{"subi",    0x0C, 6},
+{"divi",    0x0D, 6},
+{"muli",    0x0E, 6},
+{"call",    0x0F, 2},
+{"ret",     0x10, 1},
+{"blt",     0x11, 8},
+{"bgt",     0x12, 8},
+{"beq",     0x13, 8},
+{"jmp",     0x14, 2},
+{"cmpxchg", 0x15, 8},
+{"getpid",  0x16, 3},
+{"getpn",   0x17, 3},
+{"push",    0x18, 3},
+{"pop",     0x19, 3},
+{"word",    0x00, 9}, 
+{"alloc",   0x00, 9},
+{"import",  0x00, 2},
+{"export",  0x00, 2}
+};
+
+
 
 
 
@@ -79,89 +159,197 @@ void initAssemble(void) {
 //
 void assemble(char *label, INSTR instr) {
 
+  // ERROR CHECK: BAD OPCODE
+  if(instr.opcode != NULL) {
+    int valid = 0;
 
-  // Import/Export
-  if(instr.format == 2 && (strcmp(instr.opcode, "export") == 0 || strcmp(instr.opcode, "import") == 0 )) {
+    // Search our opcode array for the passed in instr opcode
+    for(int i = 0; i < OPCODE_ARRAY_LENGTH; i++) {
 
-    if(strcmp(instr.opcode, "export") == 0) {
-
-      if(symtabLookup(symtab, instr.u.format2.addr) == NULL) {
-
-        symbol_info_t *symbol_info = malloc(sizeof(symbol_info_t));
-        if(symbol_info == NULL) {
-          fprintf(stderr, "Struct Failed\n");
-          return;
-        }
-        
-
-        symbol_info->address = -1; // NOT YET DEFINED
-        symbol_info->exported = true;
-        symbol_info->imported = false;
-        symbol_info->referenced = false;
-
-        symtabInstall(symtab, instr.u.format2.addr, symbol_info);
-       
-
-      }
-
-    } else if(strcmp(instr.opcode, "import") == 0) {
-
-      if(symtabLookup(symtab, instr.u.format2.addr) == NULL) {
-
-        symbol_info_t *symbol_info = malloc(sizeof(symbol_info_t));
-        if(symbol_info == NULL) {
-          fprintf(stderr, "Struct Failed\n");
-          return;
-        }
-
-        symbol_info->address = -1; // NOT YET DEFINED
-        symbol_info->exported = false;
-        symbol_info->imported = true;
-        symbol_info->referenced = false;
-
-        symtabInstall(symtab, label, symbol_info);
+      if (strcmp(instr.opcode, opcodes[i]) == 0) {
+        valid = 1;  // Found a match
       }
     }
 
-  // A symbol is being defined on its own line
-  } else if(label != NULL) {
+    // Opcode not found so report error
+    if(!valid) {
+      error(ERROR_OPCODE_UNKNOWN, instr.opcode);
+      error_count++;
+    }
+  }
+
+
+  // Case 1: Only a label is on the line 
+  // Case 2: There is a label being defined and instructions on the line
+  if(instr.format == 0 || label) {
+
     symbol_info_t *symbol_info;
 
     // If this is the first time the symbol appears in the asm file...install it
+    // We dont only install a symbol from when its defined
     if((symbol_info = symtabLookup(symtab, label)) == NULL) {
 
+      // Symbol doesnt exist so alloc space for its data structurev
       symbol_info = malloc(sizeof(symbol_info_t));
       if(symbol_info == NULL) {
         fprintf(stderr, "Symbol install failed\n");
         return;
       }
-    }
 
+      // Set our data values
       symbol_info->address = pc;
       symbol_info->referenced = false;
+      symbol_info->exported = false;
+      symbol_info->imported = false;
 
       symtabInstall(symtab, label, symbol_info);
+
+    // ERROR CHECK: LABEL ALREADY DEFINED
+    } else if(symbol_info->address != -1) {
+      error_count++;
+      error(ERROR_LABEL_DEFINED, label);
+    
+      // Update a symbol to be defined and pass in proper address
+    } else if(symbol_info->address == -1) {
+
+      symbol_info->address = pc;
+    }
 
       // We need to decrement the pc counter each time a symbol is defined
       // because the line the symbol is defined on and the next line are treated as one for expected outputs.
       // But to the parser they are treated seperately so we must account for extra pc counts...
-      pc--;
-  }  
+      if(instr.format == 0) {
+        pc--;
+      }
 
-  if(instr.format == 2 && (strcmp(instr.opcode, "export") == 0 || strcmp(instr.opcode, "import") == 0 )) {
-    symbol_info_t *symbol_info = symtabLookup(symtab, instr.u.format2.addr);
-    symbol_info->referenced = true;
+  // Export directive
+  } else if((strcmp(instr.opcode, "export")) == 0) {
+
+    symbol_info_t *symbol_info;
+
+    if((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
+
+      // Symbol doesnt exist so alloc space for its data structure
+      symbol_info = malloc(sizeof(symbol_info_t));
+      if(symbol_info == NULL) {
+        fprintf(stderr, "Struct Failed\n");
+        return;
+      }
+
+      symbol_info->address = -1; // NOT YET DEFINED
+      symbol_info->exported = true;
+      symbol_info->imported = false;
+      symbol_info->referenced = false;
+      symtabInstall(symtab, instr.u.format2.addr, symbol_info);
+    }
+
+
+
+  // Import directive  
+  } else if(strcmp(instr.opcode, "import") == 0) {
+
+    symbol_info_t *symbol_info;
+
+    if((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
+
+      // Symbol doesnt exist so alloc space for its data structure
+      symbol_info = malloc(sizeof(symbol_info_t));
+      if(symbol_info == NULL) {
+        fprintf(stderr, "Struct Failed\n");
+        return;
+      }
+
+      symbol_info->address = -1; // NOT YET DEFINED
+      symbol_info->exported = false;
+      symbol_info->imported = true;
+      symbol_info->referenced = false;
+      symtabInstall(symtab, instr.u.format2.addr, symbol_info);
+    } else {
+      symbol_info->imported = true;
+    }
   }
-  if (instr.format == 5) {
-    symbol_info_t *symbol_info = symtabLookup(symtab, instr.u.format5.addr);
-    symbol_info->referenced = true;
 
 
-  } else if (instr.format == 8) {
-    symbol_info_t *symbol_info = symtabLookup(symtab, instr.u.format8.addr);
-    symbol_info->referenced = true;
+  // If we get here, we are getting a line from the parser which is simply an instruction line
+  // So we need to check if symbols either need to be installed or referenced
+  // Only 3 instruction formats hold addresses (2,5,8)
+
+  // FORMAT 2 INSTR
+  if(instr.format == 2) {
+    
+    symbol_info_t *symbol_info;
+
+    if((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
+
+      // Symbol doesnt exist so alloc space for its data structure
+      symbol_info = malloc(sizeof(symbol_info_t));
+      if(symbol_info == NULL) {
+        fprintf(stderr, "Alloc failed for struct\n");
+        return;
+      }
+
+      symbol_info->address = -1; // NOT YET DEFINED
+      symbol_info->referenced = true;
+      symbol_info->exported = false;
+      symbol_info->imported = false;
+
+      symtabInstall(symtab, instr.u.format2.addr, symbol_info);
+
+    // Check if instr 2 format symbol is export/import directive
+    // that has already been created, if so, these are label references
+    } else {
+      symbol_info->referenced = true;  
+    }
+  
+  // FORMAT 5 INSTR
+  } else if(instr.format == 5) {
+
+    symbol_info_t *symbol_info;
+
+    if((symbol_info = symtabLookup(symtab, instr.u.format5.addr)) == NULL) {
+
+      // Symbol doesnt exist so alloc space for its data structure
+      symbol_info = malloc(sizeof(symbol_info_t));
+      if(symbol_info == NULL) {
+        return;
+      }
+
+      symbol_info->address = -1; // NOT YET DEFINED
+      symbol_info->referenced = true;
+      symbol_info->exported = false;
+      symbol_info->imported = false;
+
+      symtabInstall(symtab, instr.u.format5.addr, symbol_info);
+
+    } else {
+      symbol_info->referenced = true;
+    }
+
+  // FORMAT 8 INSTR
+  } else if(instr.format == 8) {
+
+    symbol_info_t *symbol_info;
+
+    if((symbol_info = symtabLookup(symtab, instr.u.format8.addr)) == NULL) {
+
+      // Symbol doesnt exist so alloc space for its data structure
+      symbol_info = malloc(sizeof(symbol_info_t));
+      if(symbol_info == NULL) {
+        return;
+      }
+
+      symbol_info->address = -1; // NOT YET DEFINED
+      symbol_info->referenced = true;
+      symbol_info->exported = false;
+      symbol_info->imported = false;
+
+      symtabInstall(symtab, instr.u.format8.addr, symbol_info);
+
+    } else {
+      symbol_info->referenced = true;
+    }
   }
-
+  
   
 
   // Update our pc counter
@@ -170,21 +358,14 @@ void assemble(char *label, INSTR instr) {
     // 1 for word
     if(strcmp(instr.opcode, "word") == 0) {
       pc++;
-    // n for alloc
+
+    // N for alloc
     } else if(strcmp(instr.opcode, "alloc") == 0) {
       pc += instr.u.format9.constant;
     }
 
-  // Check if we have an import or export directive
-  } else if(instr.format == 2) {
-
-    // Dont update pc counter if import or export
-    if(strcmp(instr.opcode, "import") != 0 && strcmp(instr.opcode, "export") != 0) {
-      pc++;
-    }
-    
-  // Update pc counter for everything else
-  } else {
+  // Update pc counter for everything elese besides import and export directives
+  } else if(strcmp(instr.opcode, "import") != 0 && strcmp(instr.opcode, "export") != 0) {
     pc++;
   }
 
@@ -245,51 +426,58 @@ void assemble(char *label, INSTR instr) {
 // it returns the number of errors seen on pass1
 //
 int betweenPasses(FILE *outf) {
+
+  // If there are no errors, continue with symbol printing
+  if(error_count == 0) {
   
-  // Create our symbol table iterator
-  void *iterator = symtabCreateIterator(symtab);
-  if(iterator == NULL) {
-    fprintf(stderr, "Symtab iterator creation failed.");
-  }
+    // Create our symbol table iterator
+    void *iterator = symtabCreateIterator(symtab);
+    if(iterator == NULL) {
+      fprintf(stderr, "Symtab iterator creation failed.");
+    }
 
-  void *BSTroot = symtabCreateBST(iterator);
-  if(BSTroot == NULL) {
-    fprintf(stderr, "BST ROOT IS NULL!!\n");
-  }
-  void *BSTiterator = symtabCreateBSTIterator(BSTroot);
-  if(BSTiterator == NULL) {
-    fprintf(stderr, "BST ITERATOR IS NULL!!\n");
+    // Create our BST 
+    void *BSTroot = symtabCreateBST(iterator);
+    if(BSTroot == NULL) {
+      fprintf(stderr, "BST ROOT IS NULL!!\n");
+    }
+
+    // Create our BST iterator
+    void *BSTiterator = symtabCreateBSTIterator(BSTroot);
+    if(BSTiterator == NULL) {
+      fprintf(stderr, "BST ITERATOR IS NULL!!\n");
+    }
+
+
+    const char *symbol;
+    void *return_data;
+
+    // Loop through BST and print symbols and associated data values
+    while((symbol = symtabBSTNext(BSTiterator, &return_data)) != NULL) {
+
+      symbol_info_t *symbol_info = return_data;
+
+      printf("%s",symbol);
+
+      if(symbol_info->address != -1) {
+        printf(" %i", symbol_info->address);
+      }
+
+      if(symbol_info->referenced == true) {
+        printf(" referenced");
+      }
+      if(symbol_info->exported == true) {
+        printf(" exported");
+      }
+      if(symbol_info->imported == true) {
+        printf(" imported");
+      }
+      printf("\n");
+    }
   }
   
-
-  const char *symbol;
-  void *return_data;
-
-  while((symbol = symtabBSTNext(BSTiterator, &return_data)) != NULL) {
-
-    symbol_info_t *symbol_info = return_data;
-
-    printf("%s",symbol);
-    printf(" %i", symbol_info->address);
-
-    if(symbol_info->referenced == true) {
-      printf(" referenced");
-    }
-    if(symbol_info->exported == true) {
-      printf(" exported");
-    }
-    if(symbol_info->imported == true) {
-      printf(" imported");
-    }
-    printf("\n");
-  }
-  
-
 #if DEBUG
   fprintf(stderr, "betweenPasses called\n");
 #endif
   return 0;
 }
-
-
-

@@ -44,6 +44,7 @@ int main(int argc, char *argv[])
 
   // initialize assembler
   initAssemble();
+ // printf("Init Good\n");
 
   // check that single argument is all that is there
   if ((argc != 2))
@@ -62,8 +63,10 @@ int main(int argc, char *argv[])
     exit(1);
   }
 
+  
   // invoke parser to drive the first pass
   yyparse();
+  //printf("Parse Good\n");
 
   // close input file
   fclose(yyin);
