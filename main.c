@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
     exit(1);
   }
 
-  
+  //printf("Before parser\n");
   // invoke parser to drive the first pass
   yyparse();
   //printf("Parse Good\n");
