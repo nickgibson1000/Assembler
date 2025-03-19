@@ -58,7 +58,7 @@ typedef struct symbol_info {
   int import_count; // # times a symbol has been imported (for error checking)
 } symbol_info_t;
 
-// Number of codes + directives in vmx20 system
+// Number of opcodes + directives in vmx20 system
 #define OPCODE_ARRAY_LENGTH 30
 
 // Struct used for the below table 
@@ -103,6 +103,19 @@ static opcode_struct_t opcodes[] = {
 };
 
 
+// Function Prototypes
+
+static void *create_data_node();
+
+//static void *intialize_symbol_info(symbol_info_t *symbol_info, int address, bool referenced, 
+//                                  bool imported, bool exported, bool defined);
+
+
+
+
+
+
+
 // this is called once so that the assembler can initialize any internal
 // data structures.
 void initAssemble(void) {
@@ -111,9 +124,7 @@ void initAssemble(void) {
   // Size can be arbitrary
   symtab = symtabCreate(100);
 
-#if DEBUG
-  fprintf(stderr, "initAssemble called\n");
-#endif
+
 }
 
 // this is the "guts" of the assembler and is called for each line
@@ -131,6 +142,7 @@ void initAssemble(void) {
 // in the INSTR struct.
 //
 void assemble(char *label, INSTR instr) {
+
 
   // ERROR CHECK: UNKNOWN OPCODE AND INVALID OPERANDS FOR FORMAT
   if (instr.opcode != NULL) {
@@ -165,16 +177,20 @@ void assemble(char *label, INSTR instr) {
 
   symbol_info_t *symbol_info;
 
+
+
+
+
+
+
+
   if (instr.format == 0 || label) {
 
     // If this is the first time the symbol appears in the asm file...install it
     if ((symbol_info = symtabLookup(symtab, label)) == NULL) {
 
-        symbol_info = malloc(sizeof(symbol_info_t));
-        if (symbol_info == NULL) {
-            fprintf(stderr, "Symbol install failed\n");
-            return;
-        }
+        // Symbol doesnt exist, create a new symbol_info struct for it
+        symbol_info = create_data_node();
 
         symbol_info->address = pc;
         symbol_info->referenced = false;
@@ -191,11 +207,8 @@ void assemble(char *label, INSTR instr) {
 
             if ((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
 
-                symbol_info = malloc(sizeof(symbol_info_t));
-                if (symbol_info == NULL) {
-                    fprintf(stderr, "Alloc failed for struct\n");
-                    return;
-                }
+                // Symbol doesnt exist, create a new symbol_info struct for it
+                symbol_info = create_data_node();
 
                 symbol_info->address = -1; // NOT DEFINED
                 symbol_info->referenced = true;
@@ -215,10 +228,8 @@ void assemble(char *label, INSTR instr) {
 
             if ((symbol_info = symtabLookup(symtab, instr.u.format5.addr)) == NULL) {
 
-                symbol_info = malloc(sizeof(symbol_info_t));
-                if (symbol_info == NULL) {
-                    return;
-                }
+                // Symbol doesnt exist, create a new symbol_info struct for it
+                symbol_info = create_data_node();
 
                 symbol_info->address = -1; // NOT DEFINED
                 symbol_info->referenced = true;
@@ -234,10 +245,9 @@ void assemble(char *label, INSTR instr) {
             }
         } else if (instr.format == 8) {
             if ((symbol_info = symtabLookup(symtab, instr.u.format8.addr)) == NULL) {
-                symbol_info = malloc(sizeof(symbol_info_t));
-                if (symbol_info == NULL) {
-                    return;
-                }
+                
+                // Symbol doesnt exist, create a new symbol_info struct for it
+                symbol_info = create_data_node();
 
                 symbol_info->address = -1; // NOT DEFINED
                 symbol_info->referenced = true;
@@ -290,10 +300,53 @@ void assemble(char *label, INSTR instr) {
 
     
 
-    // We need to decrement the pc counter each time a symbol is defined
+    // We need to decrement the pc counter each time a symbol is defined in this format
+    // because of the two possiblities
     if (instr.format == 0) {
         pc--;
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   // Export directive
   } else if((strcmp(instr.opcode, "export")) == 0) {
 
@@ -302,11 +355,8 @@ void assemble(char *label, INSTR instr) {
     if(bad_operand < 1) {
       if((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
 
-        symbol_info = malloc(sizeof(symbol_info_t));
-        if(symbol_info == NULL) {
-          fprintf(stderr, "Struct Failed\n");
-          return;
-        }
+        // Symbol doesnt exist, create a new symbol_info struct for it
+        symbol_info = create_data_node();
 
         symbol_info->address = -1; // NOT YET DEFINED
         symbol_info->exported = true;
@@ -336,11 +386,8 @@ void assemble(char *label, INSTR instr) {
     if(bad_operand < 1) {
     if((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
 
-      symbol_info = malloc(sizeof(symbol_info_t));
-      if(symbol_info == NULL) {
-        fprintf(stderr, "Struct Failed\n");
-        return;
-      }
+      // Symbol doesnt exist, create a new symbol_info struct for it
+      symbol_info = create_data_node();
 
       symbol_info->address = -1; // NOT YET DEFINED
       symbol_info->exported = false;
@@ -365,17 +412,13 @@ void assemble(char *label, INSTR instr) {
 
 
   // If we get here, we are getting a line from the parser which is simply an instruction line
-  // So we need to check if symbols either need ot be installed or referenced
+  // So we need to check if symbols either need to be installed or referenced
   } else if(instr.format == 2) {
       
       if((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
 
-        // Symbol doesnt exist so alloc space for its data structure
-        symbol_info = malloc(sizeof(symbol_info_t));
-        if(symbol_info == NULL) {
-          fprintf(stderr, "Alloc failed for struct\n");
-          return;
-        }
+        // Symbol doesnt exist, create a new symbol_info struct for it
+        symbol_info = create_data_node();
 
         symbol_info->address = -1; // NOT DEFINED
         symbol_info->referenced = true;
@@ -397,11 +440,8 @@ void assemble(char *label, INSTR instr) {
     } else if(instr.format == 5) {
       if((symbol_info = symtabLookup(symtab, instr.u.format5.addr)) == NULL) {
 
-        // Symbol doesnt exist so alloc space for its data structure
-        symbol_info = malloc(sizeof(symbol_info_t));
-        if(symbol_info == NULL) {
-          return;
-        }
+        // Symbol doesnt exist, create a new symbol_info struct for it
+        symbol_info = create_data_node();
 
         symbol_info->address = -1; // NOT DEFINED
         symbol_info->referenced = true;
@@ -423,11 +463,9 @@ void assemble(char *label, INSTR instr) {
 
       if((symbol_info = symtabLookup(symtab, instr.u.format8.addr)) == NULL) {
 
-        // Symbol doesnt exist so alloc space for its data structure
-        symbol_info = malloc(sizeof(symbol_info_t));
-        if(symbol_info == NULL) {
-          return;
-        }
+        
+        // Symbol doesnt exist, create a new symbol_info struct for it
+        symbol_info = create_data_node();
 
         symbol_info->address = -1; // NOT DEFINED
         symbol_info->referenced = true;
@@ -444,6 +482,65 @@ void assemble(char *label, INSTR instr) {
         symbol_info->import_reference_count++;
       }
   }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   
   
   // Update our pc counter
@@ -504,6 +601,12 @@ void assemble(char *label, INSTR instr) {
   }
 }
 
+
+
+
+
+
+
 // this is called between passes and provides the assembler the file
 // pointer to use for outputing the object file
 //
@@ -519,7 +622,7 @@ int betweenPasses(FILE *outf) {
   if((pc * 5) < MAX_WORDS && bad_operand < 1) { 
     
 
-    // Create dummy error symtab structs
+    // Create dummy error structs to iterate through our symbols
     void *error_iterator = symtabCreateIterator(symtab);
     if(error_iterator == NULL) {
       fprintf(stderr, "Symtab iterator creation failed.");
@@ -587,7 +690,7 @@ int betweenPasses(FILE *outf) {
   
 
   if(error_count == 0) {
-    
+
     int import_symbol_references = 0;
   
     // Create our symbol table iterator
@@ -596,10 +699,14 @@ int betweenPasses(FILE *outf) {
       fprintf(stderr, "Symtab iterator creation failed.");
     }
 
+    // Get the root of our BST 
     void *BSTroot = symtabCreateBST(iterator);
     if(BSTroot == NULL) {
       fprintf(stderr, "BST ROOT IS NULL!!\n");
     }
+
+    // Create our iterator to go through our BST and get all symbols
+    // and associated data
     void *BSTiterator = symtabCreateBSTIterator(BSTroot);
     if(BSTiterator == NULL) {
       fprintf(stderr, "BST ITERATOR IS NULL!!\n");
@@ -636,16 +743,37 @@ int betweenPasses(FILE *outf) {
     }
 
   
-  int inSymbol_size = exported_count * 5;
-  int outSymbol_size = import_symbol_references * 5;
-  int program_size = pc;
+    int inSymbol_size = exported_count * 5;
+    int outSymbol_size = import_symbol_references * 5;
+    int program_size = pc;
 
- // Write header of object file
-  fwrite(&inSymbol_size, sizeof(int), 1, outf);
-  fwrite(&outSymbol_size, sizeof(int), 1, outf);
-  fwrite(&program_size, sizeof(int), 1, outf);
+    // Write header of object file
+    fwrite(&inSymbol_size, sizeof(int), 1, outf);
+    fwrite(&outSymbol_size, sizeof(int), 1, outf);
+    fwrite(&program_size, sizeof(int), 1, outf);
+    
 
   }
   
   return error_count;
+}
+
+
+
+/*
+Param: A handle to an empty symbol_info structure
+Return: A void pointer to our newly created symbol info struct
+
+Allocate memory for a new symbol_info struct 
+*/
+static void *create_data_node() {
+
+  symbol_info_t *symbol_info = malloc(sizeof(symbol_info_t));
+
+  if(symbol_info == NULL) {
+    fprintf(stderr, "Failed to create symbol node...\n");
+    exit(-1);
+  }
+
+  return (void *) symbol_info;
 }
