@@ -107,8 +107,8 @@ static opcode_struct_t opcodes[] = {
 
 static void *create_data_node();
 
-//static void *intialize_symbol_info(symbol_info_t *symbol_info, int address, bool referenced, 
-//                                  bool imported, bool exported, bool defined);
+static void intialize_symbol_info(symbol_info_t *symbol_info, int address, bool referenced, 
+                                  bool imported, bool exported, bool defined);
 
 
 
@@ -192,14 +192,7 @@ void assemble(char *label, INSTR instr) {
         // Symbol doesnt exist, create a new symbol_info struct for it
         symbol_info = create_data_node();
 
-        symbol_info->address = pc;
-        symbol_info->referenced = false;
-        symbol_info->imported = false;
-        symbol_info->exported = false;
-        symbol_info->export_count = 0;
-        symbol_info->import_count = 0;
-        symbol_info->defined = true;
-        symbol_info->import_reference_count = 0;
+        intialize_symbol_info(symbol_info, pc, false, false, false, true);
 
         symtabInstall(symtab, label, symbol_info);
 
@@ -210,15 +203,11 @@ void assemble(char *label, INSTR instr) {
                 // Symbol doesnt exist, create a new symbol_info struct for it
                 symbol_info = create_data_node();
 
-                symbol_info->address = -1; // NOT DEFINED
-                symbol_info->referenced = true;
-                symbol_info->exported = false;
-                symbol_info->imported = false;
-                symbol_info->import_count = 0;
-                symbol_info->export_count = 0;
-                symbol_info->import_reference_count = 0;
+                intialize_symbol_info(symbol_info, -1, true, false, false, false);
+
 
                 symtabInstall(symtab, instr.u.format2.addr, symbol_info);
+
                 symbol_info->import_reference_count++;
             } else {
                 symbol_info->referenced = true;
@@ -231,12 +220,7 @@ void assemble(char *label, INSTR instr) {
                 // Symbol doesnt exist, create a new symbol_info struct for it
                 symbol_info = create_data_node();
 
-                symbol_info->address = -1; // NOT DEFINED
-                symbol_info->referenced = true;
-                symbol_info->exported = false;
-                symbol_info->imported = false;
-                symbol_info->import_count = 0;
-                symbol_info->import_reference_count = 0;
+                intialize_symbol_info(symbol_info, -1, true, false, false, false);
 
                 symtabInstall(symtab, instr.u.format5.addr, symbol_info);
                 symbol_info->import_reference_count++;
@@ -249,12 +233,7 @@ void assemble(char *label, INSTR instr) {
                 // Symbol doesnt exist, create a new symbol_info struct for it
                 symbol_info = create_data_node();
 
-                symbol_info->address = -1; // NOT DEFINED
-                symbol_info->referenced = true;
-                symbol_info->exported = false;
-                symbol_info->imported = false;
-                symbol_info->import_count = 0;
-                symbol_info->import_reference_count = 0;
+                intialize_symbol_info(symbol_info, -1, true, false, false, false);
 
                 symtabInstall(symtab, instr.u.format8.addr, symbol_info);
                 symbol_info->import_reference_count++;
@@ -358,14 +337,10 @@ void assemble(char *label, INSTR instr) {
         // Symbol doesnt exist, create a new symbol_info struct for it
         symbol_info = create_data_node();
 
-        symbol_info->address = -1; // NOT YET DEFINED
-        symbol_info->exported = true;
-        symbol_info->imported = false;
-        symbol_info->referenced = false;
-        symbol_info->defined = false;
+        intialize_symbol_info(symbol_info, -1, false, false, true, false);
+        
         symbol_info->export_count = 1;
-        symbol_info->import_count = 0;
-
+      
         symtabInstall(symtab, instr.u.format2.addr, symbol_info);
       } else {
         symbol_info->exported = true;
@@ -389,14 +364,9 @@ void assemble(char *label, INSTR instr) {
       // Symbol doesnt exist, create a new symbol_info struct for it
       symbol_info = create_data_node();
 
-      symbol_info->address = -1; // NOT YET DEFINED
-      symbol_info->exported = false;
-      symbol_info->imported = true;
-      symbol_info->referenced = false;
-      symbol_info->defined = false;
-      symbol_info->export_count = 0;
+      intialize_symbol_info(symbol_info, -1, false, true, false, false);
+
       symbol_info->import_count = 1;
-      symbol_info->import_reference_count = 0;
 
       symtabInstall(symtab, instr.u.format2.addr, symbol_info);
     } else {
@@ -420,11 +390,7 @@ void assemble(char *label, INSTR instr) {
         // Symbol doesnt exist, create a new symbol_info struct for it
         symbol_info = create_data_node();
 
-        symbol_info->address = -1; // NOT DEFINED
-        symbol_info->referenced = true;
-        symbol_info->exported = false;
-        symbol_info->imported = false;
-        symbol_info->export_count = 0;
+        intialize_symbol_info(symbol_info, -1, true, false, false, false);
 
         symtabInstall(symtab, instr.u.format2.addr, symbol_info);
         symbol_info->import_reference_count++;
@@ -443,11 +409,8 @@ void assemble(char *label, INSTR instr) {
         // Symbol doesnt exist, create a new symbol_info struct for it
         symbol_info = create_data_node();
 
-        symbol_info->address = -1; // NOT DEFINED
-        symbol_info->referenced = true;
-        symbol_info->exported = false;
-        symbol_info->imported = false;
-        symbol_info->export_count = 0;
+        intialize_symbol_info(symbol_info, -1, true, false, false, false);
+
 
         symtabInstall(symtab, instr.u.format5.addr, symbol_info);
         symbol_info->import_reference_count++;
@@ -467,11 +430,8 @@ void assemble(char *label, INSTR instr) {
         // Symbol doesnt exist, create a new symbol_info struct for it
         symbol_info = create_data_node();
 
-        symbol_info->address = -1; // NOT DEFINED
-        symbol_info->referenced = true;
-        symbol_info->exported = false;
-        symbol_info->imported = false;
-        symbol_info->export_count = 0;
+        intialize_symbol_info(symbol_info, -1, true, false, false, false);
+
 
         symtabInstall(symtab, instr.u.format8.addr, symbol_info);
         symbol_info->import_reference_count++;
@@ -482,54 +442,6 @@ void assemble(char *label, INSTR instr) {
         symbol_info->import_reference_count++;
       }
   }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -759,7 +671,6 @@ int betweenPasses(FILE *outf) {
 }
 
 
-
 /*
 Param: A handle to an empty symbol_info structure
 Return: A void pointer to our newly created symbol info struct
@@ -776,4 +687,19 @@ static void *create_data_node() {
   }
 
   return (void *) symbol_info;
+}
+
+
+static void intialize_symbol_info(symbol_info_t *symbol_info, int address, bool referenced, 
+                                  bool imported, bool exported, bool defined) {
+
+  symbol_info->address =  address;
+  symbol_info->referenced = referenced;
+  symbol_info->imported = imported;
+  symbol_info->exported = exported;
+  symbol_info->defined = defined;
+  symbol_info->export_count = 0;
+  symbol_info->import_count = 0;
+  symbol_info->import_reference_count = 0;
+
 }
