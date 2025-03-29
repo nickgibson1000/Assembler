@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 
 // Error definitions
@@ -34,8 +35,16 @@
 // Max number of words(data) that can appear in a file
 #define MAX_WORDS 1048576
 
+// Max value that can be stored in a 20 bit value
+#define MAX_20_BIT_VALUE 0xFFFFF
+
+// Max value tha can be stored in a 16 bit value
+#define MAX_16_BIT_VALUE 0xFFFF
+
 // Global PC counter
 static int pc = 0;
+
+static int pc2 = 0;
 
 // Global symtab struct
 static void *symtab;
@@ -45,6 +54,25 @@ static int error_count = 0;
 
 // Global variable to track # of ERROR_OPERAND_FORMAT
 static int bad_operand = 0;
+
+// Global variable to track # of ERROR_CONSTANT_INVALID
+static int constant_unfit = 0;
+
+// Global variable to track # of ERROR_OPCODE_UNKOWN
+static int unknown_opcode = 0;
+
+// If value is 1, we are on pass one
+// If value is 2, we are on pass two
+static int pass_counter = 1;
+
+static FILE *file_pointer = NULL; // Initialize to NULL
+
+// A linked list used to track each time an imported symbol is referenced
+typedef struct Node {
+  int address; 
+  struct Node *next;
+} Node_t;
+
 
 // Struct to hold information
 typedef struct symbol_info {
@@ -56,6 +84,7 @@ typedef struct symbol_info {
   int import_reference_count; // # times an imported symbol has been referenced
   int export_count; // # times a symbol has been exported (for error checking)
   int import_count; // # times a symbol has been imported (for error checking)
+  Node_t *reference_address; // A linked list of all addresses when an imported symbol is referenced
 } symbol_info_t;
 
 // Number of opcodes + directives in vmx20 system
@@ -104,11 +133,16 @@ static opcode_struct_t opcodes[] = {
 
 
 // Function Prototypes
+// Descriptions can be found towards end of file
 
 static void *create_data_node();
 
 static void intialize_symbol_info(symbol_info_t *symbol_info, int address, bool referenced, 
                                   bool imported, bool exported, bool defined);
+
+static int find_opcode(char *opcode);          
+
+static void update_pc(int *pc_counter, INSTR instr);
 
 
 
@@ -143,7 +177,7 @@ void initAssemble(void) {
 //
 void assemble(char *label, INSTR instr) {
 
-
+  if(pass_counter == 1) {
   // ERROR CHECK: UNKNOWN OPCODE AND INVALID OPERANDS FOR FORMAT
   if (instr.opcode != NULL) {
 
@@ -171,16 +205,12 @@ void assemble(char *label, INSTR instr) {
 
       // ERROR CHECK: UNKNOWN OPCODE ENCOUNTERED
       error(ERROR_OPCODE_UNKNOWN, instr.opcode);
+      unknown_opcode++;
       error_count++;
     }
 }
-
+  // Create a handle that will be used to store symbol information
   symbol_info_t *symbol_info;
-
-
-
-
-
 
 
 
@@ -189,26 +219,40 @@ void assemble(char *label, INSTR instr) {
     // If this is the first time the symbol appears in the asm file...install it
     if ((symbol_info = symtabLookup(symtab, label)) == NULL) {
 
-        // Symbol doesnt exist, create a new symbol_info struct for it
-        symbol_info = create_data_node();
+      // Symbol doesnt exist, create a new symbol_info struct for it
+      symbol_info = create_data_node();
 
-        intialize_symbol_info(symbol_info, pc, false, false, false, true);
+      intialize_symbol_info(symbol_info, pc, false, false, false, true);
 
-        symtabInstall(symtab, label, symbol_info);
+      // Install symbol into our table
+      symtabInstall(symtab, label, symbol_info);
 
-        if (instr.format == 2) {
+      /*
+        
+      */
+      if (instr.format == 2) {
 
-            if ((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
+        if ((symbol_info = symtabLookup(symtab, instr.u.format2.addr)) == NULL) {
 
-                // Symbol doesnt exist, create a new symbol_info struct for it
-                symbol_info = create_data_node();
+          // Symbol doesnt exist, create a new symbol_info struct for it
+          symbol_info = create_data_node();
 
-                intialize_symbol_info(symbol_info, -1, true, false, false, false);
+          intialize_symbol_info(symbol_info, -1, true, false, false, false);
 
+          symtabInstall(symtab, instr.u.format2.addr, symbol_info);
 
-                symtabInstall(symtab, instr.u.format2.addr, symbol_info);
+          symbol_info->import_reference_count++;
+              
+          Node_t *node = malloc(sizeof(Node_t));
+          if(node == NULL) {
+            exit(-1);
+          }
 
-                symbol_info->import_reference_count++;
+          node->address = pc;
+          node->next = symbol_info->reference_address;
+          symbol_info->reference_address = node;
+              
+
             } else {
                 symbol_info->referenced = true;
             }
@@ -224,6 +268,16 @@ void assemble(char *label, INSTR instr) {
 
                 symtabInstall(symtab, instr.u.format5.addr, symbol_info);
                 symbol_info->import_reference_count++;
+
+                Node_t *node = malloc(sizeof(Node_t));
+                if(node == NULL) {
+                  exit(-1);
+                }
+
+                node->address = pc;
+                node->next = symbol_info->reference_address;
+                symbol_info->reference_address = node;
+
             } else {
                 symbol_info->referenced = true;
             }
@@ -237,6 +291,15 @@ void assemble(char *label, INSTR instr) {
 
                 symtabInstall(symtab, instr.u.format8.addr, symbol_info);
                 symbol_info->import_reference_count++;
+
+                Node_t *node = malloc(sizeof(Node_t));
+                if(node == NULL) {
+                  exit(-1);
+                }
+
+                node->address = pc;
+                node->next = symbol_info->reference_address;
+                symbol_info->reference_address = node;
             } else {
                 symbol_info->referenced = true;
             }
@@ -252,6 +315,15 @@ void assemble(char *label, INSTR instr) {
         symbol_info->address = pc;
         symbol_info->defined = true;
         symbol_info->import_reference_count++;
+
+        Node_t *node = malloc(sizeof(Node_t));
+        if(node == NULL) {
+          exit(-1);
+        }
+
+        node->address = pc;
+        node->next = symbol_info->reference_address;
+        symbol_info->reference_address = node;
         
     } 
 
@@ -261,6 +333,18 @@ void assemble(char *label, INSTR instr) {
       symbol_info->referenced = true;
 
       if(strcmp(instr.opcode,"import") == 0) {
+
+        Node_t *node = malloc(sizeof(Node_t));
+        if(node == NULL) {
+          exit(-1);
+        }
+
+        node->address = pc;
+        node->next = symbol_info->reference_address;
+        symbol_info->reference_address = node;
+       
+        symbol_info->reference_address = node;
+
         symbol_info->import_reference_count++;
       }
     }
@@ -284,46 +368,6 @@ void assemble(char *label, INSTR instr) {
     if (instr.format == 0) {
         pc--;
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
   // Export directive
@@ -394,16 +438,38 @@ void assemble(char *label, INSTR instr) {
 
         symtabInstall(symtab, instr.u.format2.addr, symbol_info);
         symbol_info->import_reference_count++;
+        Node_t *node = malloc(sizeof(Node_t));
+        if(node == NULL) {
+          exit(-1);
+        }
+
+        node->address = pc;
+        node->next = symbol_info->reference_address;
+        symbol_info->reference_address = node;
+       
+        symbol_info->reference_address = node;
 
 
       // Check if instr 2 format symbol is export/import directive
       // that has already been created, if so, these are label references
       } else {
+      
         symbol_info->referenced = true;  
         symbol_info->import_reference_count++;
+        Node_t *node = malloc(sizeof(Node_t));
+        if(node == NULL) {
+          exit(-1);
+        }
+
+        node->address = pc;
+        node->next = symbol_info->reference_address;
+        symbol_info->reference_address = node;
+       
+        symbol_info->reference_address = node;
       }
       
     } else if(instr.format == 5) {
+
       if((symbol_info = symtabLookup(symtab, instr.u.format5.addr)) == NULL) {
 
         // Symbol doesnt exist, create a new symbol_info struct for it
@@ -414,11 +480,32 @@ void assemble(char *label, INSTR instr) {
 
         symtabInstall(symtab, instr.u.format5.addr, symbol_info);
         symbol_info->import_reference_count++;
+        Node_t *node = malloc(sizeof(Node_t));
+        if(node == NULL) {
+          exit(-1);
+        }
+
+        node->address = pc;
+        node->next = symbol_info->reference_address;
+        symbol_info->reference_address = node;
+       
+        symbol_info->reference_address = node;
 
 
       } else {
         symbol_info->referenced = true;
         symbol_info->import_reference_count++;
+        
+        Node_t *node = malloc(sizeof(Node_t));
+        if(node == NULL) {
+          exit(-1);
+        }
+
+        node->address = pc;
+        node->next = symbol_info->reference_address;
+        symbol_info->reference_address = node;
+       
+        symbol_info->reference_address = node;
       }
 
 
@@ -436,62 +523,42 @@ void assemble(char *label, INSTR instr) {
         symtabInstall(symtab, instr.u.format8.addr, symbol_info);
         symbol_info->import_reference_count++;
 
+        Node_t *node = malloc(sizeof(Node_t));
+        if(node == NULL) {
+          exit(-1);
+        }
+
+        node->address = pc;
+        node->next = symbol_info->reference_address;
+        symbol_info->reference_address = node;
+       
+        symbol_info->reference_address = node;
+
 
       } else {
         symbol_info->referenced = true;
         symbol_info->import_reference_count++;
+
+        Node_t *node = malloc(sizeof(Node_t));
+        if(node == NULL) {
+          exit(-1);
+        }
+
+        node->address = pc;
+        node->next = symbol_info->reference_address;
+        symbol_info->reference_address = node;
+       
+        symbol_info->reference_address = node;
       }
   }
 
 
-
-
-
-
-
-
-
-
-
-  
-  
-  // Update our pc counter
-  if(instr.format == 9) {
-
-    // N words for alloc
-    if(strcmp(instr.opcode, "alloc") == 0) {
-
-      // ERROR CHECK: IF ALLOC CONSTANT IS 0
-      if(instr.u.format9.constant <= 0) {
-
-        error(ERROR_CONSTANT_ZERO, instr.u.format9.constant);
-        error_count++;
-
-      } else {
-        pc += instr.u.format9.constant; // Else update pc by alloc constant
-      }
-
-    // 1 word for word
-    } else if(strcmp(instr.opcode, "word") == 0) {
-      pc++;
-    }
-
-  // Check if we have an import or export directive
-  } else if(instr.format == 2) {
-
-    // Dont update pc counter if import or export
-    if(strcmp(instr.opcode, "import") != 0 && strcmp(instr.opcode, "export") != 0) {
-      pc++;
-    }
-    
-  // Update pc counter for everything else
-  } else {
-    pc++;
-  }
+  // Update pc counter for first pass
+  update_pc(&pc, instr);
 
 
   // ERROR CHECK: PROGRAM EXCEEDS MAX WORD SIZE
-  if((pc * 5) > MAX_WORDS) {
+  if(pc > MAX_WORDS) {
     error(ERROR_PROGRAM_SIZE);
     error_count++;
   }
@@ -508,14 +575,232 @@ void assemble(char *label, INSTR instr) {
   if(instr.format == 4) {
     if(instr.u.format4.constant >= (1 << 19) || instr.u.format4.constant < -(1 << 19)) {
       error(ERROR_CONSTANT_INVALID, instr.u.format4.constant);
+      constant_unfit++;
       error_count++;
     }
+  }
+} // END OF PASS 1 CHECK
+
+
+
+
+
+// SECOND PASS
+if(pass_counter == 2) {
+ 
+  if(instr.format == 1) {
+
+
+    /*
+    Halt
+    Ret
+    */
+
+    int opcode = find_opcode(instr.opcode);
+
+    int encoding = (opcode & 0xFF); // bits 0-7
+
+  
+    fwrite(&encoding, sizeof(int), 1, file_pointer);
+
+
+  } else if(instr.format == 2) {
+
+    /*
+    call
+    jmp
+    import
+    export
+
+    We skip encodings for import and export
+    */
+
+    if(strcmp(instr.opcode, "jmp") == 0 || strcmp(instr.opcode, "call") == 0) {
+
+      symbol_info_t *symbol_info = symtabLookup(symtab, instr.u.format2.addr);
+
+      int opcode = find_opcode(instr.opcode);
+
+
+      int address = 0;
+      if(!symbol_info->imported) {
+
+        int pc_current = pc2 + 1;
+        int pc_new = symbol_info->address;
+
+        /*
+        Pc New = Pc Current + Address
+        */
+        address = pc_new - pc_current;
+      }
+
+      // ERROR CHECK: ADDRESS DOES NOT FIT IN 20 BITS
+      if(address > 0x7FFFF || address < -0x80000) {
+        error(ERROR_LABEL_SIZE20, instr.u.format2.addr);
+        error_count++;
+      }
+
+      int encoding = ((address & 0xFFFFF) << 12) |
+                      (opcode & 0xFF); 
+
+      fwrite(&encoding, sizeof(int), 1, file_pointer);
+    }
+
+  } else if(instr.format == 3) {
+
+    int opcode = find_opcode(instr.opcode);
+    int r1 = instr.u.format3.reg;
+
+
+    int encoding = ((r1 & 0xF) << 8) |
+                    (opcode & 0xFF);
+
+    fwrite(&encoding, sizeof(int), 1, file_pointer);
+
+
+  } else if(instr.format == 4) {
+
+    int opcode = find_opcode(instr.opcode);
+
+
+    int encoding = ((instr.u.format4.constant & 0xFFFFF) << 12) |
+                    ((instr.u.format4.reg & 0xF) << 8) |
+                    (opcode & 0xFF);
+
+    fwrite(&encoding, sizeof(int), 1, file_pointer);
+
+
+
+  } else if(instr.format == 5) {
+
+
+    symbol_info_t *symbol_info = symtabLookup(symtab, instr.u.format5.addr);
+
+    int encoding = 0;
+    int opcode = find_opcode(instr.opcode);
+    int register_num = instr.u.format5.reg;
+
+    int address = 0;
+
+    if(!symbol_info->imported) {
+      int pc_current = pc2;
+      pc_current++;
+
+      int pc_new = symbol_info->address;
+
+      address = pc_new - pc_current;
+    }
+
+     // ERROR CHECK: ADDRESS DOES NOT FIT IN 20 BITS
+     if(address > 0x7FFFF || address < -0x80000) {
+      error(ERROR_LABEL_SIZE20, instr.u.format5.addr);
+      error_count++;
+    }
+
+    encoding = ((address & 0xFFFFF) << 12) | // Address in upper bits
+           ((register_num & 0xF) << 8) |     // Register in middle 4 bits
+           (opcode & 0xFF);                  // Opcode in lower 8 bits
+
+    fwrite(&encoding, sizeof(int), 1, file_pointer);
+
+
+
+
+  } else if(instr.format == 6) {
+
+    int opcode = find_opcode(instr.opcode);
+
+    int encoding = ((instr.u.format6.reg2 & 0xF) << 12) |  // reg2 in bits 12-15
+                   ((instr.u.format6.reg1 & 0xF) << 8)  |   // reg1 in bits 8-11
+                   (opcode & 0xFF);         // opcode in bits 0-7
+
+    fwrite(&encoding, sizeof(int), 1, file_pointer);
+
+
+  } else if(instr.format == 7) {
+
+    // Get the instructions numeric opcode
+    int opcode = find_opcode(instr.opcode);
+
+    int reg1 = instr.u.format7.reg1;
+    int reg2 = instr.u.format7.reg2;
+
+    int encoding = ((instr.u.format7.offset & 0xFFFFF) << 16) | // Address in upper bits
+                    ((reg2 & 0xF) << 12) |  // reg2 in bits 12-15
+                    ((reg1 & 0xF) << 8)  |   // reg1 in bits 8-11
+                    (opcode & 0xFF);         // opcode in bits 0-7
+
+
+    fwrite(&encoding, sizeof(int), 1, file_pointer);
+
+
+  } else if(instr.format == 8) {
+
+    symbol_info_t *symbol_info = symtabLookup(symtab, instr.u.format8.addr);
+
+
+    int opcode = find_opcode(instr.opcode);
+    int reg1 = instr.u.format8.reg1;
+    int reg2 = instr.u.format8.reg2;
+
+    int address = 0;
+      if(!symbol_info->imported) {
+      int pc_current = pc2;
+      pc_current++;
+
+      int pc_new = symbol_info->address;
+
+      address = pc_new - pc_current;
+    }
+
+     // ERROR CHECK: ADDRESS DOES NOT FIT IN 16 BITS
+     if(address > 0x7FFF || address < -0x8000) {
+      error(ERROR_LABEL_SIZE16, instr.u.format8.addr);
+      error_count++;
+     }
+
+    int encoding = ((address & 0xFFFFF) << 16) | // Address in upper bits
+                    ((reg2 & 0xF) << 12) |  // reg2 in bits 12-15
+                    ((reg1 & 0xF) << 8)  |   // reg1 in bits 8-11
+                    (opcode & 0xFF);         // opcode in bits 0-7
+
+
+    fwrite(&encoding, sizeof(int), 1, file_pointer);
+
+
+  } else if(instr.format == 9) {
+
+    /*
+    word
+    alloc
+    */
+    int zero = 0;
+    if(strcmp(instr.opcode, "word") == 0) {
+      fwrite(&instr.u.format9.constant, sizeof(int), 1, file_pointer);
+    } else {
+
+      for(int i = 0; i < instr.u.format9.constant; i++) {
+        fwrite(&zero, sizeof(int), 1, file_pointer);
+      }
+    }
+
   }
 }
 
 
 
 
+
+
+  // 
+  if(label || instr.format == 0) {
+    if(instr.format == 0) {
+      pc2--;
+    }
+  }
+  // Update pc2 counter for the second pass
+  update_pc(&pc2, instr);
+}
 
 
 
@@ -526,27 +811,42 @@ void assemble(char *label, INSTR instr) {
 //
 int betweenPasses(FILE *outf) {
 
+  // Assign the file pointer parameter to a static variable so it can 
+  // be accessed in assemble during our second pass for encodings
+  if (file_pointer == NULL) { 
+    file_pointer = outf; 
+  }
+
+  // Set pc2 to 0 after we finish our first pass
+  if (pass_counter == 1) {
+    pc2 = 0;
+  }
+
 
   // Error Checking
   // Identical to proccessing all symbols and printing appropriate information to our object file
   // But we use error names to signify all error
 
-  if((pc * 5) < MAX_WORDS && bad_operand < 1) { 
+  /*
+  Due to reasons I hadn't enough time to invesitgate why, I had to make sure that if certain errors happened,
+  I never looped through my BST or else a seg fault would happen
+  */
+  if(pc  < MAX_WORDS && bad_operand < 1 && constant_unfit < 1 && unknown_opcode < 1) { 
     
 
     // Create dummy error structs to iterate through our symbols
     void *error_iterator = symtabCreateIterator(symtab);
     if(error_iterator == NULL) {
-      fprintf(stderr, "Symtab iterator creation failed.");
+      fprintf(stderr, "ERROR Symtab iterator creation failed.");
     }
 
     void *error_BSTroot = symtabCreateBST(error_iterator);
     if(error_BSTroot == NULL) {
-      fprintf(stderr, "BST ROOT IS NULL!!\n");
+      fprintf(stderr, "ERROR BST ROOT IS NULL!!\n");
     }
     void *error_BSTiterator = symtabCreateBSTIterator(error_BSTroot);
     if(error_BSTiterator == NULL) {
-      fprintf(stderr, "BST ITERATOR IS NULL!!\n");
+      fprintf(stderr, "ERROR BST ITERATOR IS NULL!!\n");
     }
 
     const char *error_symbol;
@@ -599,7 +899,6 @@ int betweenPasses(FILE *outf) {
 
 
   // If we have no errors, we can proceed with processing all required information
-  
 
   if(error_count == 0) {
 
@@ -629,6 +928,7 @@ int betweenPasses(FILE *outf) {
     void *return_data;
     int exported_count = 0;
 
+
     while((symbol = symtabBSTNext(BSTiterator, &return_data)) != NULL) {
 
       symbol_info_t *symbol_info = return_data;
@@ -644,8 +944,10 @@ int betweenPasses(FILE *outf) {
         printf(" referenced");
       }
       if(symbol_info->exported == true) {
+
         printf(" exported");
         exported_count++;
+
       }
       if(symbol_info->imported == true) {
         printf(" imported");
@@ -663,10 +965,131 @@ int betweenPasses(FILE *outf) {
     fwrite(&inSymbol_size, sizeof(int), 1, outf);
     fwrite(&outSymbol_size, sizeof(int), 1, outf);
     fwrite(&program_size, sizeof(int), 1, outf);
+
+
+    /*
+    Go through our BST again and write out
+      1. All exported symbols and their address to obj file
+    */
+
+    // Create our symbol table iterator
+    void *iterator2 = symtabCreateIterator(symtab);
+    if(iterator == NULL) {
+      fprintf(stderr, "Symtab iterator2 creation failed.");
+    }
+
+    // Get the root of our BST 
+    void *BSTroot2 = symtabCreateBST(iterator2);
+    if(BSTroot == NULL) {
+      fprintf(stderr, "BST ROOT2 IS NULL!!\n");
+    }
+
+    // Create our iterator to go through our BST and get all symbols
+    // and associated data
+    void *BSTiterator2 = symtabCreateBSTIterator(BSTroot2);
+    if(BSTiterator == NULL) {
+      fprintf(stderr, "BST ITERATOR2 IS NULL!!\n");
+    }
+
+
+    const char *symbol2;
+    void *return_data2;
+
+    while((symbol2 = symtabBSTNext(BSTiterator2, &return_data2)) != NULL) {
+
+      
+      symbol_info_t *symbol_info2 = return_data2;
+
+      
+        // Write inSymbols to object file
+
+        if(symbol_info2->exported == true) {
+
+        
+
+          // Buffer for symbol name exactly 16 bytes long
+          char symbol_name_buffer[100] = {0};
+        
+          // Copy symbol name, truncating or padding as necessary
+          strncpy(symbol_name_buffer, symbol2, sizeof(symbol_name_buffer) - 1);
+
+          // Write the 16-byte symbol name (4 words)
+          fwrite(symbol_name_buffer, sizeof(char), 16, outf);
+
+          // Write the address as the 5th word
+          fwrite(&symbol_info2->address, sizeof(uint32_t), 1, outf);
+    
+    
+        }
+    
+    }
+
+
+    /*
+    Go through our BST again and write out
+      2. All imported symbols and their referenced addresses to obj file
+    */
+
+    // Create our symbol table iterator
+    void *iterator3 = symtabCreateIterator(symtab);
+    if(iterator == NULL) {
+      fprintf(stderr, "Symtab iterator3 creation failed.");
+    }
+
+    // Get the root of our BST 
+    void *BSTroot3 = symtabCreateBST(iterator3);
+    if(BSTroot == NULL) {
+      fprintf(stderr, "BST3 ROOT IS NULL!!\n");
+    }
+
+    // Create our iterator to go through our BST and get all symbols
+    // and associated data
+    void *BSTiterator3 = symtabCreateBSTIterator(BSTroot3);
+    if(BSTiterator == NULL) {
+      fprintf(stderr, "BST3 ITERATOR IS NULL!!\n");
+    }
+
+
+    const char *symbol3;
+    void *return_data3;
+
+    while((symbol3 = symtabBSTNext(BSTiterator3, &return_data3)) != NULL) {
+      
+      symbol_info_t *symbol_info3 = return_data3;
     
 
+      // Write inSymbols to object file
+      if(symbol_info3->imported == true) {
+
+        Node_t *current = symbol_info3->reference_address;
+
+        while(current != NULL) {
+
+        
+          // Buffer for symbol name exactly 16 bytes long
+          char symbol_name_buffer[100] = {0};
+        
+          // Copy symbol name, truncating or padding as necessary
+          strncpy(symbol_name_buffer, symbol3, sizeof(symbol_name_buffer) - 1);
+
+
+          // Write the 16-byte symbol name (4 words)
+          fwrite(symbol_name_buffer, sizeof(char), 16, outf);
+
+          // Write the address as the 5th word
+          fwrite(&current->address, sizeof(uint32_t), 1, outf);
+
+          current = current->next;
+        }
+
+      }
+    }
   }
-  
+
+  // Set pass counter to 2 as right before we enter the pass
+  pass_counter = 2;
+
+  // The number of errors encountered on pass 1
   return error_count;
 }
 
@@ -689,7 +1112,14 @@ static void *create_data_node() {
   return (void *) symbol_info;
 }
 
+/*
+Params: handle to symbol_info struct, various information contained in the symbol data struct
 
+Note: export_count, import_count, and import_reference_count are dealt with in their respective stmts
+in assemble function
+
+Intialize all symbol data for passed in symbol_info handle
+*/
 static void intialize_symbol_info(symbol_info_t *symbol_info, int address, bool referenced, 
                                   bool imported, bool exported, bool defined) {
 
@@ -702,4 +1132,68 @@ static void intialize_symbol_info(symbol_info_t *symbol_info, int address, bool 
   symbol_info->import_count = 0;
   symbol_info->import_reference_count = 0;
 
+}
+
+
+/*
+Param: A char pointer to an instructions opcode string
+
+Return: The numeric value associated with the passed in opcode string
+*/
+static int find_opcode(char *opcode) {
+
+  int opcode_val = 0;
+
+  // Find our symbol in the symbol array and grab its numeric opcode
+  for(int i = 0; i < OPCODE_ARRAY_LENGTH; i++) {
+
+    if(strcmp(opcodes[i].opcode_string, opcode) == 0) {
+      opcode_val = opcodes[i].opcode_value; // Opcode found
+  
+    }
+  }
+
+  return opcode_val;
+}                                  
+
+
+/*
+Params: A pointer to whatever pc counter we are choosing to increment (pc or pc2)
+        An INSTR variable containing the current instruction we have received from the parser
+*/
+static void update_pc(int *pc_counter, INSTR instr) {
+
+  // Update our pc counter
+  if(instr.format == 9) {
+
+    // N words for alloc
+    if(strcmp(instr.opcode, "alloc") == 0) {
+
+      // ERROR CHECK: IF ALLOC CONSTANT IS 0
+      if(instr.u.format9.constant <= 0) {
+
+        error(ERROR_CONSTANT_ZERO, instr.u.format9.constant);
+        error_count++;
+
+      } else {
+        (*pc_counter) += instr.u.format9.constant; // Else update pc by alloc constant
+      }
+
+    // 1 word for word
+    } else if(strcmp(instr.opcode, "word") == 0) {
+      (*pc_counter)++;
+    }
+
+  // Check if we have an import or export directive
+  } else if(instr.format == 2) {
+
+    // Dont update pc counter if import or export
+    if(strcmp(instr.opcode, "import") != 0 && strcmp(instr.opcode, "export") != 0) {
+      (*pc_counter)++;
+    }
+
+  // Update pc counter for everything else
+  } else {
+    (*pc_counter)++;
+  }
 }
